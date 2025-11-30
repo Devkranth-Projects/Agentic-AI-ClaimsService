@@ -10,7 +10,7 @@ on:
   # 2 & 3. Pull Request (Build, Test, and then Trigger deployment flows)
   pull_request:
     branches:
-      - 'Development'
+      - 'development'
       - 'main'
 
   # 4. Manual Approval Gate Trigger (For PR to Development branch deployment)
