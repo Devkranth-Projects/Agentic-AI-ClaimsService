@@ -27,7 +27,7 @@ on:
 
 env:
   DOTNET_CORE_VERSION: 8.0.x
-  SOLUTION_PATH: Automated-Risk-Platform-MicroService-Claims.sln
+  SOLUTION_PATH: Agentic-Ai-ClaimsService.sln
   PROJECT_PATH: ClaimsServiceApi/Health.Claims.Service.Api/Health.Claims.Service.Api.csproj
   ARTIFACT_NAME: ClaimsServiceApiBinaries
   ACR_REGISTRY_NAME: devhealthclaimscontainerregistry.azurecr.io
