@@ -180,8 +180,8 @@ jobs:
         run: |
           $appcmdPath = "C:\Windows\System32\inetsrv\appcmd.exe"
           $iisTargetFolder = "F:\Work\Personal\Deployment\ClaimServiceApi\development"
-          $appPoolName = "DevBranchClaimsService"
-          $websiteName = "ClaimsServiceDevBranch"
+          $appPoolName = "AspNetCore"
+          $websiteName = "ClaimsSeviceDev"
 
           if ((Get-Service W3SVC).Status -ne 'Running') { Start-Service W3SVC -ErrorAction Stop }
 
