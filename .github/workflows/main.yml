@@ -1,6 +1,5 @@
 name: CI-CD-Pipeline-Local-IIS-Azure
 
-# 🎯 Define Triggers
 on:
   push:
     branches:
@@ -12,13 +11,15 @@ on:
   workflow_dispatch:
     inputs:
       sha_id:
-        description: 'SHA of the commit to deploy (used to fetch artifact)'
+        description: 'Commit SHA to deploy'
         required: true
         type: string
       environment:
-        description: 'Target Environment (must be development)'
+        description: 'Target environment'
         required: true
-        type: environment
+        type: choice
+        options:
+          - Development
 
 env:
   DOTNET_CORE_VERSION: 8.0.x
@@ -29,159 +30,156 @@ env:
   ACR_REPOSITORY: claims-service-api
 
 jobs:
-  # --------------------------------------------------------------------
-  # 🏗️ BUILD STAGE
-  # --------------------------------------------------------------------
+  # ------------------------------------------------------
+  # 1️⃣ BUILD STAGE
+  # ------------------------------------------------------
   build:
-    name: 1️⃣ Build Stage
+    name: 1️⃣ Build
     runs-on: ubuntu-latest
+    concurrency:
+      group: build-${{ github.ref }}
+      cancel-in-progress: false
     if: |
       (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/Feature/')) ||
       (github.event_name == 'pull_request' && (github.base_ref == 'development' || github.base_ref == 'main'))
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-
-      - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_CORE_VERSION }}
-
-      - name: Cache NuGet packages
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
         with:
           path: ~/.nuget/packages
           key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
           restore-keys: |
             ${{ runner.os }}-nuget-
-
-      - name: Restore Solution
-        run: dotnet restore ${{ env.SOLUTION_PATH }} --verbosity normal
-
-      - name: Build Solution
-        run: dotnet build ${{ env.SOLUTION_PATH }} --configuration Release --no-restore --verbosity normal
-
-      - name: Publish .NET Application
-        run: dotnet publish ${{ env.PROJECT_PATH }} --configuration Release --output ${{ runner.temp }}/publish_output
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+      - name: Restore
+        run: dotnet restore ${{ env.SOLUTION_PATH }}
+      - name: Build
+        run: dotnet build ${{ env.SOLUTION_PATH }} -c Release --no-restore
+      - name: Publish
+        run: dotnet publish ${{ env.PROJECT_PATH }} -c Release -o ${{ runner.temp }}/publish_output
+      - uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}-${{ github.sha }}
           path: ${{ runner.temp }}/publish_output
-          retention-days: 7
+          retention-days: 14
 
-  # --------------------------------------------------------------------
-  # 🧪 TEST STAGE
-  # --------------------------------------------------------------------
+  # ------------------------------------------------------
+  # 2️⃣ TEST STAGE
+  # ------------------------------------------------------
   test:
-    name: 2️⃣ Test Stage
-    runs-on: ubuntu-latest
+    name: 2️⃣ Tests
     needs: build
+    runs-on: ubuntu-latest
+    concurrency:
+      group: test-${{ github.ref }}
+      cancel-in-progress: false
     if: success()
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_CORE_VERSION }}
+      - name: Domain Tests
+        run: dotnet test "ClaimsServiceApi/Health.CLaims.Service.Domain.Tests/Health.CLaims.Service.Domain.Tests.csproj" -c Release
+      - name: Infrastructure Tests
+        run: dotnet test "ClaimsServiceApi/Health.Claims.Service.Infrastructure.Tests/Health.Claims.Service.Infrastructure.Tests.csproj" -c Release
 
-      - name: Run Domain Tests
-        run: dotnet test "ClaimsServiceApi/Health.CLaims.Service.Domain.Tests/Health.CLaims.Service.Domain.Tests.csproj" --configuration Release
-
-      - name: Run Infrastructure Tests
-        run: dotnet test "ClaimsServiceApi/Health.Claims.Service.Infrastructure.Tests/Health.Claims.Service.Infrastructure.Tests.csproj" --configuration Release
-
-  # --------------------------------------------------------------------
-  # 🟢 FEATURE DEPLOY (Local IIS)
-  # --------------------------------------------------------------------
+  # ------------------------------------------------------
+  # 3A LOCAL FEATURE DEPLOY (IIS)
+  # ------------------------------------------------------
   feature-deploy:
-    name: 3A 💾 Approval Gated Deploy to Local Feature IIS
+    name: 3A 💾 Feature IIS Deployment
     needs: test
-    if: success() && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/Feature/')
     runs-on: self-hosted
-    environment: Feature-Staging
+    if: success() && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/Feature/')
+    environment:
+      name: Local
+      url: http://localhost:8061
+    concurrency:
+      group: deploy-Local
+      cancel-in-progress: false
+    env:
+      ENVIRONMENT_NAME: Local
     steps:
-      - name: Download Build Artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}-${{ github.sha }}
           path: deploy_target
-
-      - name: Deploy to Local IIS
+      - name: Deploy to IIS
         shell: powershell
         run: |
           $appcmdPath = "C:\Windows\System32\inetsrv\appcmd.exe"
-          $iisTargetFolder = "F:\Work\Personal\Deployment\ClaimServiceApi\local"
+          $iisTargetFolder = "F:\Work\Personal\Deployment\ClaimServiceApi\$($env:ENVIRONMENT_NAME)"
           $appPoolName = "AspNetCore"
-          $websiteName = "ClaimsServiceLocal"
 
-          # Ensure WAS service is running
           if ((Get-Service W3SVC).Status -ne 'Running') { Start-Service W3SVC -ErrorAction Stop }
 
-          # Create or update App Pool
           if (-not (& $appcmdPath list apppool /name:$appPoolName -ErrorAction SilentlyContinue)) {
               & $appcmdPath add apppool /name:$appPoolName /managedRuntimeVersion:"" /enable32BitAppOnWin64:"false"
           }
           & $appcmdPath set apppool /apppool.name:$appPoolName /managedRuntimeVersion:"" /enable32BitAppOnWin64:"false"
           try { & $appcmdPath stop apppool /apppool.name:$appPoolName } catch {}
 
-          # Prepare deployment folder
           if (-not (Test-Path $iisTargetFolder)) { New-Item -ItemType Directory -Force -Path $iisTargetFolder }
           else { Remove-Item -Path "$iisTargetFolder\*" -Force -Recurse -ErrorAction SilentlyContinue }
 
           Copy-Item -Path "deploy_target\*" -Destination $iisTargetFolder -Recurse
 
-          # Copy web.config
-          $webConfigSource = Join-Path $env:GITHUB_WORKSPACE "ClaimsServiceApi\Health.Claims.Service.Api\web.config.development"
-          if (Test-Path $webConfigSource) { Copy-Item -Path $webConfigSource -Destination (Join-Path $iisTargetFolder "web.config") -Force }
+          $envWebConfig = Join-Path $iisTargetFolder "web.config.$($env:ENVIRONMENT_NAME)"
+          $targetWebConfig = Join-Path $iisTargetFolder "web.config"
+          if (Test-Path $envWebConfig) { Copy-Item -Path $envWebConfig -Destination $targetWebConfig -Force }
 
           & $appcmdPath start apppool /apppool.name:$appPoolName
 
-  # --------------------------------------------------------------------
-  # 🟡 DEV IIS TRIGGER (Approval Gate)
-  # --------------------------------------------------------------------
+  # ------------------------------------------------------
+  # 3B DEV IIS TRIGGER
+  # ------------------------------------------------------
   dev-iis-trigger:
-    name: 3B 💾 Dev IIS Deployment Trigger
+    name: 3B 🔔 Trigger Dev Deploy
     needs: test
     runs-on: ubuntu-latest
     if: success() && github.event_name == 'pull_request' && github.base_ref == 'development'
     steps:
-      - name: Trigger Dev Deployment Workflow
-        uses: benc-uk/workflow-dispatch-action@v1
+      - name: Trigger Dev Environment Deployment
+        uses: benc-uk/workflow-dispatch@v1
         with:
           workflow: ${{ github.workflow }}
           ref: ${{ github.base_ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
           inputs: |
-            { 
+            {
               "sha_id": "${{ github.sha }}",
-              "environment": "development" 
+              "environment": "Development"
             }
 
-  # --------------------------------------------------------------------
-  # 🟡 DEV DEPLOY APPROVED
-  # --------------------------------------------------------------------
+  # ------------------------------------------------------
+  # 4️⃣ DEV APPROVAL GATED DEPLOY
+  # ------------------------------------------------------
   dev-deploy-approved:
-    name: 4️⃣ 🔒 Approved Deploy to Dev Branch IIS
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'development'
+    name: 4️⃣ 🔒 Approved Deploy to Dev IIS
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'Development'
     runs-on: self-hosted
-    environment: Development-Staging
+    environment:
+      name: Development
+      url:  http://localhost:9000
+    concurrency:
+      group: deploy-Development
+      cancel-in-progress: false
+    env:
+      ENVIRONMENT_NAME: Development
     steps:
-      - name: Download Build Artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}-${{ github.event.inputs.sha_id }}
           path: deploy_target
-
-      - name: Deploy to Local IIS
+      - name: Deploy to IIS
         shell: powershell
         run: |
           $appcmdPath = "C:\Windows\System32\inetsrv\appcmd.exe"
-          $iisTargetFolder = "F:\Work\Personal\Deployment\ClaimServiceApi\development"
+          $iisTargetFolder = "F:\Work\Personal\Deployment\ClaimServiceApi\$($env:ENVIRONMENT_NAME)"
           $appPoolName = "AspNetCore"
-          $websiteName = "ClaimsSeviceDev"
 
           if ((Get-Service W3SVC).Status -ne 'Running') { Start-Service W3SVC -ErrorAction Stop }
 
@@ -196,41 +194,37 @@ jobs:
 
           Copy-Item -Path "deploy_target\*" -Destination $iisTargetFolder -Recurse
 
-          $webConfigSource = Join-Path $env:GITHUB_WORKSPACE "ClaimsServiceApi\Health.Claims.Service.Api\web.config.Development"
-          if (Test-Path $webConfigSource) { Copy-Item -Path $webConfigSource -Destination (Join-Path $iisTargetFolder "web.config") -Force }
+          $envWebConfig = Join-Path $iisTargetFolder "web.config.$($env:ENVIRONMENT_NAME)"
+          $targetWebConfig = Join-Path $iisTargetFolder "web.config"
+          if (Test-Path $envWebConfig) { Copy-Item -Path $envWebConfig -Destination $targetWebConfig -Force }
 
           & $appcmdPath start apppool /apppool.name:$appPoolName
 
-  # --------------------------------------------------------------------
-  # 🔴 MAIN ACR PUSH
-  # --------------------------------------------------------------------
-  main-acr-push:
-    name: 3C 🐳 Main ACR Push Stage
-    needs: test
-    runs-on: ubuntu-latest
-    if: success() && github.event_name == 'pull_request' && github.base_ref == 'main'
-    environment: Production
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Azure Login for ACR
-        uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-          enable-AzPSSession: true
-
-      - name: Build and Push Docker Image to ACR
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ClaimsServiceApi/Health.Claims.Service.Api/Dockerfile
-          push: true
-          tags: |
-            ${{ env.ACR_REGISTRY_NAME }}/${{ env.ACR_REPOSITORY }}:${{ github.sha }}
-            ${{ env.ACR_REGISTRY_NAME }}/${{ env.ACR_REPOSITORY }}:latest
-
-
-
+  # ------------------------------------------------------
+  # 3C MAIN → ACR (Production deploy)
+  # ------------------------------------------------------
+  # main-acr-push:
+  #   name: 3C 🐳 Push to Azure ACR
+  #   needs: test
+  #   runs-on: ubuntu-latest
+  #   if: success() && github.event_name == 'pull_request' && github.base_ref == 'main'
+  #   environment:
+  #     name: Development     # GitHub approval
+  #     url: https://portal.azure.com
+  #   concurrency:
+  #     group: deploy-ACR
+  #     cancel-in-progress: false
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: docker/setup-buildx-action@v3
+  #     - uses: azure/login@v1
+  #       with:
+  #         creds: ${{ secrets.AZURE_CREDENTIALS }}
+  #     - uses: docker/build-push-action@v6
+  #       with:
+  #         context: .
+  #         file: ClaimsServiceApi/Health.Claims.Service.Api/Dockerfile
+  #         push: true
+  #         tags: |
+  #           ${{ env.ACR_REGISTRY_NAME }}/${{ env.ACR_REPOSITORY }}:${{ github.sha }}
+  #           ${{ env.ACR_REGISTRY_NAME }}/${{ env.ACR_REPOSITORY }}:latest
