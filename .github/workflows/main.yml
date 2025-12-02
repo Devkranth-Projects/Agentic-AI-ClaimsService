@@ -6,7 +6,7 @@ on:
       - 'Feature/**'
   pull_request:
     branches:
-      - 'development'
+      - 'Development'
       - 'main'
   workflow_dispatch:
     inputs:
@@ -41,7 +41,7 @@ jobs:
       cancel-in-progress: false
     if: |
       (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/Feature/')) ||
-      (github.event_name == 'pull_request' && (github.base_ref == 'development' || github.base_ref == 'main'))
+      (github.event_name == 'pull_request' && (github.base_ref == 'Development' || github.base_ref == 'main'))
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
@@ -140,7 +140,7 @@ jobs:
     name: 3B 🔔 Trigger Dev Deploy
     needs: test
     runs-on: ubuntu-latest
-    if: success() && github.event_name == 'pull_request' && github.base_ref == 'development'
+    if: success() && github.event_name == 'pull_request' && github.base_ref == 'Development'
     steps:
       - name: Trigger Dev Environment Deployment
         uses: benc-uk/workflow-dispatch@v1
