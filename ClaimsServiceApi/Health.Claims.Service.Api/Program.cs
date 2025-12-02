@@ -18,22 +18,18 @@ var builder = WebApplication.CreateBuilder(args);
 // ------------------------------
 // 1️⃣ Configure Kestrel for Docker
 // ------------------------------
-//builder.WebHost.UseUrls("http://+:9090"); // Bind to all interfaces in container
-
 if (builder.Environment.IsEnvironment("Docker"))
 {
-    builder.WebHost.UseUrls("http://+:9090"); // Only bind 9090 in Docker
+    builder.WebHost.UseUrls("http://+:9090");
 }
 
 // ------------------------------
 // 2️⃣ Database Configuration
 // ------------------------------
-var databaseProvider = builder.Configuration
-    .GetValue<string>("DatabaseProvider")
+var databaseProvider = builder.Configuration.GetValue<string>("DatabaseProvider")
     ?? throw new InvalidOperationException("DatabaseProvider configuration is missing.");
 
-var connectionString = builder.Configuration
-    .GetConnectionString(databaseProvider)
+var connectionString = builder.Configuration.GetConnectionString(databaseProvider)
     ?? throw new InvalidOperationException($"Connection string for provider '{databaseProvider}' not found.");
 
 builder.Services.AddDbContext<ClaimsDataServiceDBContext>(options =>
@@ -67,30 +63,32 @@ builder.Services.AddScoped<IClaimRepository, ClaimRepository>();
 builder.Services.AddScoped<IDocumentRepository, DocumentRepository>();
 builder.Services.AddScoped<IClaimStatusRepository, ClaimStatusRepository>();
 builder.Services.AddSingleton<IMessageProducer, RabbitMqProducer>();
-builder.Services.AddAutoMapper(typeof(ClaimantProfile).Assembly);
-builder.Services.AddScoped<IClaimService, ClaimService>();
 
-// ------------------------------
-// 4️⃣ Application Layer
-// ------------------------------
-builder.Services.AddAutoMapper(typeof(ClaimService).Assembly);
-builder.Services.AddValidatorsFromAssemblyContaining<SubmitClaimRequestValidator>();
+// AutoMapper (only once)
+builder.Services.AddAutoMapper(typeof(ClaimantProfile).Assembly);
+
+// Application services
 builder.Services.AddScoped<IClaimService, ClaimService>();
 builder.Services.AddScoped<IClaimantService, ClaimantService>();
 builder.Services.AddScoped<IPolicyService, PolicyService>();
 
+// Validators
+builder.Services.AddValidatorsFromAssemblyContaining<SubmitClaimRequestValidator>();
+
 // ------------------------------
-// 5️⃣ Web Services
+// 4️⃣ Web Services
 // ------------------------------
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
 builder.Services.AddApiVersioning(options =>
 {
     options.AssumeDefaultVersionWhenUnspecified = true;
     options.DefaultApiVersion = new ApiVersion(1, 0);
     options.ReportApiVersions = true;
 });
+
 builder.Services.AddVersionedApiExplorer(options =>
 {
     options.GroupNameFormat = "'v'VVV";
@@ -98,7 +96,7 @@ builder.Services.AddVersionedApiExplorer(options =>
 });
 
 // ------------------------------
-// 6️⃣ CORS Configuration
+// 5️⃣ CORS
 // ------------------------------
 var allowedOrigins = builder.Configuration
     .GetValue<string>("AllowedOrigins")
@@ -120,34 +118,43 @@ builder.Services.AddCors(options =>
 });
 
 // ------------------------------
-// 7️⃣ Build app
+// 6️⃣ Build App
 // ------------------------------
 var app = builder.Build();
 
 // ------------------------------
-// 8️⃣ Middleware pipeline
+// 7️⃣ Middleware Pipeline (Correct Order)
 // ------------------------------
 app.UseCors("CorsPolicy");
+
+// Custom exception middleware
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
-//if (app.Environment.IsDevelopment())
-//{
-    app.UseSwagger();
-    app.UseSwaggerUI();
+// Swagger
+app.UseSwagger();
+app.UseSwaggerUI();
 
-    // Apply EF Core migrations automatically in dev
+// Automatically apply migrations in DEV
+if (app.Environment.IsDevelopment())
+{
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<ClaimsDataServiceDBContext>();
     db.Database.Migrate();
-//}
+}
 
-// Only use HTTPS redirection if NOT running in Docker
-if (!builder.Environment.IsEnvironment("Docker"))
+// Only use HTTPS redirect outside Docker
+if (!app.Environment.IsEnvironment("Docker"))
 {
     app.UseHttpsRedirection();
 }
 
+// REQUIRED for routing controllers
+app.UseRouting();
+
+// Authentication/Authorization must come AFTER routing
 app.UseAuthorization();
+
+// Map API controllers
 app.MapControllers();
 
 app.Run();
