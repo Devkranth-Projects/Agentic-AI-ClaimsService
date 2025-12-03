@@ -78,7 +78,7 @@ jobs:
           dotnet-version: ${{ env.DOTNET_CORE_VERSION }}
 
       - name: Domain Tests
-        run: dotnet test ClaimsServiceApi/Health.Claims.Service.Domain.Tests/Health.Claims.Service.Domain.Tests.csproj -c Release
+        run: dotnet test "ClaimsServiceApi/Health.CLaims.Service.Domain.Tests/Health.CLaims.Service.Domain.Tests.csproj" -c Release
 
       - name: Infrastructure Tests
         run: dotnet test ClaimsServiceApi/Health.Claims.Service.Infrastructure.Tests/Health.Claims.Service.Infrastructure.Tests.csproj -c Release
