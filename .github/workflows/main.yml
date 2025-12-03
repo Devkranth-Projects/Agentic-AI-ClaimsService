@@ -67,7 +67,7 @@ jobs:
           name: ${{ env.ARTIFACT_NAME }}-${{ github.sha }}
           path: ${{ runner.temp }}/publish_output
 
-  ---
+
 
   # ============================================================
   # 2️⃣ TEST
@@ -88,7 +88,7 @@ jobs:
       - name: Run Infrastructure Tests
         run: dotnet test "ClaimsServiceApi/Health.Claims.Service.Infrastructure.Tests/Health.Claims.Service.Infrastructure.Tests.csproj" -c Release
 
-  ---
+ 
 
   # ============================================================
   # 3️⃣ LOCAL IIS DEPLOYMENT (Feature/Bug branches)
@@ -141,7 +141,7 @@ jobs:
           & $appcmd start apppool /apppool.name:"AspNetCore"
           Write-Host "Local IIS deployment completed successfully."
 
-  ---
+
 
   # ============================================================
   # 4️⃣ MAIN DEPLOYMENT (Development/Main → Requires Approval)
@@ -203,7 +203,7 @@ jobs:
           & $appcmd start apppool /apppool.name:"AspNetCore"
           Write-Host "Deployment to $envName completed successfully."
   
-  ---
+  
 
   # ============================================================
   # 5️⃣ MANUAL RE-DEPLOY (Workflow Dispatch)
