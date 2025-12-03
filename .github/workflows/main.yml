@@ -3,12 +3,16 @@ name: CI-CD-Pipeline-Local-IIS-Azure
 on:
   push:
     branches:
+      # Build/Test/Deploy now run AFTER a merge (push) to these core branches
+      - 'Development'
+      - 'main'
       - 'Feature/**'
       - 'Bug/**'
   pull_request:
     branches:
-      - 'Development'
-      - 'main'
+      # Optional: Keep PR checks for feature/bug branches if desired
+      - 'Feature/**'
+      - 'Bug/**'
   workflow_dispatch:
     inputs:
       sha_id:
@@ -31,13 +35,11 @@ env:
 
 jobs:
   # ============================================================
-  # 1️⃣ BUILD
+  # 1️⃣ BUILD (Runs after push/merge)
   # ============================================================
   build:
     name: 1️⃣ Build
     runs-on: ubuntu-latest
-    if: |
-      github.event_name == 'push' || github.event_name == 'pull_request'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -63,7 +65,7 @@ jobs:
           path: ${{ runner.temp }}/publish_output
 
   # ============================================================
-  # 2️⃣ TEST
+  # 2️⃣ TEST (Runs after push/merge)
   # ============================================================
   test:
     name: 2️⃣ Run Tests
@@ -80,9 +82,10 @@ jobs:
 
       - name: Run Infrastructure Tests
         run: dotnet test "ClaimsServiceApi/Health.Claims.Service.Infrastructure.Tests/Health.Claims.Service.Infrastructure.Tests.csproj" -c Release
+  
 
   # ============================================================
-  # 3️⃣ LOCAL IIS DEPLOYMENT (Feature/Bug branches, skip approval)
+  # 3️⃣ LOCAL IIS DEPLOYMENT (Feature/Bug branches)
   # ============================================================
   local-deploy:
     name: 3️⃣ Local IIS Deployment
@@ -104,10 +107,14 @@ jobs:
           $envName = "Local"
           $appcmd = "C:\Windows\System32\inetsrv\appcmd.exe"
           $targetPath = "F:\Work\Personal\Deployment\ClaimServiceApi\$envName"
+          $mainConfig = Join-Path $targetPath "web.config"
+          # Using web.config.Development for the Local environment
+          $envConfigFile = "web.config.Development" 
 
           Write-Host "------------------------------------------------------------"
           Write-Host "Starting Local IIS Deployment for branch: $envName"
           Write-Host "Target path: $targetPath"
+          Write-Host "Config file: $envConfigFile"
           Write-Host "------------------------------------------------------------"
 
           # Ensure target folder exists and clean
@@ -123,9 +130,7 @@ jobs:
           Write-Host "Copying published files to $targetPath..."
           Copy-Item "deploy_target\*" $targetPath -Recurse -Force
 
-          # Handle web.config
-          $mainConfig = Join-Path $targetPath "web.config"
-          $envConfigFile = "web.config.Development"
+          # Handle web.config renaming (Checked and Corrected)
           if (Test-Path $mainConfig) {
               Write-Host "Removing existing web.config..."
               Remove-Item $mainConfig -Force
@@ -135,6 +140,11 @@ jobs:
               Rename-Item (Join-Path $targetPath $envConfigFile) $mainConfig
           } else {
               Write-Host "Warning: $envConfigFile not found, skipping rename."
+              # Added check for default web.config if the environment-specific one is missing
+              if (-not (Test-Path $mainConfig)) {
+                  Write-Host "Error: Final web.config is missing. Deployment may fail."
+                  exit 1
+              }
           }
 
           # Restart IIS AppPool
@@ -145,9 +155,10 @@ jobs:
           Write-Host "------------------------------------------------------------"
           Write-Host "Local IIS deployment completed successfully."
           Write-Host "------------------------------------------------------------"
+ 
 
   # ============================================================
-  # 4️⃣ APPROVED DEPLOYMENT (Development/Main → Requires Approval)
+  # 4️⃣ APPROVED DEPLOYMENT (Development/Production → Requires Approval)
   # ============================================================
   deploy-approved:
     name: 4️⃣ Deploy with Environment Approval
@@ -169,10 +180,19 @@ jobs:
           $envName = "${{ github.event.inputs.environment }}"
           $appcmd = "C:\Windows\System32\inetsrv\appcmd.exe"
           $targetPath = "F:\Work\Personal\Deployment\ClaimServiceApi\$envName"
+          $mainConfig = Join-Path $targetPath "web.config"
+          
+          # Determines the correct config file based on the workflow_dispatch input
+          $envConfigFile = if ($envName -eq "Development") { 
+              "web.config.Development" 
+          } else { 
+              "web.config.Production" 
+          }
 
           Write-Host "------------------------------------------------------------"
           Write-Host "Starting deployment to approved environment: $envName"
           Write-Host "Target path: $targetPath"
+          Write-Host "Config file: $envConfigFile"
           Write-Host "------------------------------------------------------------"
 
           if (Test-Path $targetPath) {
@@ -186,10 +206,7 @@ jobs:
           Write-Host "Copying published files to $targetPath..."
           Copy-Item "deploy_target\*" $targetPath -Recurse -Force
 
-          # Handle web.config based on environment
-          $mainConfig = Join-Path $targetPath "web.config"
-          $envConfigFile = if ($envName -eq "Development") { "web.config.Development" } else { "web.config.Production" }
-
+          # Handle web.config renaming (Checked and Corrected)
           if (Test-Path $mainConfig) {
               Write-Host "Removing existing web.config..."
               Remove-Item $mainConfig -Force
@@ -199,6 +216,10 @@ jobs:
               Rename-Item (Join-Path $targetPath $envConfigFile) $mainConfig
           } else {
               Write-Host "Warning: $envConfigFile not found, skipping rename."
+              if (-not (Test-Path $mainConfig)) {
+                  Write-Host "Error: Final web.config is missing. Deployment may fail."
+                  exit 1
+              }
           }
 
           Write-Host "Restarting IIS AppPool 'AspNetCore'..."
