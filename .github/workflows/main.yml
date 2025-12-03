@@ -8,7 +8,7 @@ on:
 
   pull_request:
     branches:
-      - "Development"      
+      - "Development"
       - "main"
 
   workflow_dispatch:
@@ -22,7 +22,7 @@ on:
         required: true
         type: choice
         options:
-          - Development          
+          - Development
           - Production
 
 env:
@@ -34,7 +34,7 @@ env:
 jobs:
 
   # ============================================================
-  # 1️⃣ BUILD STAGE (Feature push + PRs)
+  # 1️⃣ BUILD STAGE (Feature/Bug push + any PR)
   # ============================================================
   build:
     name: 1️⃣ Build
@@ -42,9 +42,8 @@ jobs:
     if: |
       (github.event_name == 'push' && (startsWith(github.ref, 'refs/heads/Feature/') || startsWith(github.ref, 'refs/heads/Bug/'))) ||
       (github.event_name == 'pull_request')
-
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup .NET
@@ -52,9 +51,9 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_CORE_VERSION }}
 
-      - name: Restore NuGet packages
+      - name: Restore dependencies
         run: |
-          echo "🔹 Restoring NuGet packages..."
+          echo "🔹 Restoring .NET dependencies..."
           dotnet restore ${{ env.SOLUTION_PATH }}
 
       - name: Build solution
@@ -63,29 +62,31 @@ jobs:
           dotnet build ${{ env.SOLUTION_PATH }} -c Release --no-restore
 
       - name: Publish project
-        shell: pwsh
         run: |
-          Write-Host "🔹 Publishing project..."
-          Write-Host "🔸 Project path: ${{ env.PROJECT_PATH }}"
-          Write-Host "🔸 Output folder: $env:TEMP/publish_output"
-          dotnet publish ${{ env.PROJECT_PATH }} -c Release -o $env:TEMP/publish_output
+          echo "🔹 Publishing project..."
+          echo "🔸 Project path: ${{ env.PROJECT_PATH }}"
+          PUBLISH_OUTPUT="${{ runner.temp }}/publish_output"
+          echo "🔸 Output folder: $PUBLISH_OUTPUT"
+          dotnet publish ${{ env.PROJECT_PATH }} -c Release -o $PUBLISH_OUTPUT
+          echo "✅ Publish completed."
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}-${{ github.sha }}
           path: ${{ runner.temp }}/publish_output
+          retention-days: 14
+          if-no-files-found: error
 
   # ============================================================
   # 2️⃣ TEST STAGE
   # ============================================================
   test:
-    name: 2️⃣ Tests
+    name: 2️⃣ Run Tests
     needs: build
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup .NET
@@ -96,15 +97,15 @@ jobs:
       - name: Run Domain Tests
         run: |
           echo "🔹 Running Domain Tests..."
-          dotnet test "ClaimsServiceApi/Health.CLaims.Service.Domain.Tests/Health.CLaims.Service.Domain.Tests.csproj" -c Release
+          dotnet test ClaimsServiceApi/Health.CLaims.Service.Domain.Tests/Health.CLaims.Service.Domain.Tests.csproj -c Release
 
       - name: Run Infrastructure Tests
         run: |
           echo "🔹 Running Infrastructure Tests..."
-          dotnet test "ClaimsServiceApi/Health.Claims.Service.Infrastructure.Tests/Health.Claims.Service.Infrastructure.Tests.csproj" -c Release
+          dotnet test ClaimsServiceApi/Health.Claims.Service.Infrastructure.Tests/Health.Claims.Service.Infrastructure.Tests.csproj -c Release
 
   # ============================================================
-  # 3A LOCAL DEPLOYMENT (Feature/Bug branches)
+  # 3A LOCAL IIS DEPLOYMENT (Feature/Bug push only)
   # ============================================================
   feature-deploy:
     name: 3A 💾 Local IIS Deployment
@@ -112,9 +113,8 @@ jobs:
     runs-on: self-hosted
     if: github.event_name == 'push' && (startsWith(github.ref, 'refs/heads/Feature/') || startsWith(github.ref, 'refs/heads/Bug/'))
     environment: Local
-
     steps:
-      - name: Download artifact
+      - name: Download build artifact
         uses: actions/download-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}-${{ github.sha }}
@@ -123,49 +123,46 @@ jobs:
       - name: Deploy to Local IIS
         shell: powershell
         run: |
-          Write-Host "🔹 Starting Local IIS Deployment..."
+          Write-Host "🔹 Deploying to Local IIS..."
           $envName = "Local"
           $appcmd = "C:\Windows\System32\inetsrv\appcmd.exe"
           $targetPath = "F:\Work\Personal\Deployment\ClaimServiceApi\$envName"
 
-          Write-Host "🔸 Cleaning target folder: $targetPath"
+          Write-Host "🔹 Cleaning target folder: $targetPath"
           if (Test-Path $targetPath) { Remove-Item "$targetPath\*" -Recurse -Force }
           else { New-Item -Path $targetPath -ItemType Directory }
 
-          Write-Host "🔸 Copying published files..."
+          Write-Host "🔹 Copying site files..."
           Copy-Item "deploy_target\*" $targetPath -Recurse -Force
 
-          Write-Host "🔸 Handling web.config replacement..."
-          $envConfig = Join-Path $targetPath "web.config.development"
-          $mainConfig = Join-Path $targetPath "web.config"
-          if (Test-Path $mainConfig) { Remove-Item $mainConfig -Force }
-          if (Test-Path $envConfig) { Copy-Item $envConfig $mainConfig -Force }
+          Write-Host "🔹 Replacing web.config with environment-specific config..."
+          $envConfig = Join-Path $targetPath "web.config.Development"
+          if ($envName -eq "Local" -and Test-Path $envConfig) { Copy-Item $envConfig (Join-Path $targetPath "web.config") -Force }
 
-          Write-Host "🔸 Restarting IIS AppPool..."
+          Write-Host "🔹 Restarting IIS AppPool..."
           & $appcmd stop apppool /apppool.name:"AspNetCore" 2>$null
           & $appcmd start apppool /apppool.name:"AspNetCore"
-          Write-Host "✅ Local IIS Deployment completed!"
+          Write-Host "✅ Local IIS Deployment completed."
 
   # ============================================================
-  # 3B TRIGGER DEVELOPMENT APPROVAL WORKFLOW
+  # 3B TRIGGER ENVIRONMENT APPROVAL (PR → Development/Main)
   # ============================================================
   dev-trigger:
-    name: 3B 🔔 Trigger Development Deployment
+    name: 3B 🔔 Trigger Environment Deployment
     needs: test
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' && github.base_ref == 'Development'
-
+    if: github.event_name == 'pull_request' && (github.base_ref == 'Development' || github.base_ref == 'main')
     steps:
       - name: Trigger deploy with approval
         uses: benc-uk/workflow-dispatch@v1
         with:
           workflow: CI-CD-Pipeline-Local-IIS-Azure
-          ref: Development
+          ref: ${{ github.base_ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
           inputs: |
             {
               "sha_id": "${{ github.sha }}",
-              "environment": "Development"
+              "environment": "${{ github.base_ref }}"
             }
 
   # ============================================================
@@ -177,9 +174,8 @@ jobs:
     runs-on: self-hosted
     environment:
       name: ${{ github.event.inputs.environment }}
-
     steps:
-      - name: Download artifact
+      - name: Download build artifact
         uses: actions/download-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}-${{ github.event.inputs.sha_id }}
@@ -188,26 +184,27 @@ jobs:
       - name: Deploy to IIS (Approved Environment)
         shell: powershell
         run: |
-          Write-Host "🔹 Starting Deployment to ${{ github.event.inputs.environment }}..."
+          Write-Host "🔹 Deploying to $(${{ github.event.inputs.environment }}) IIS..."
           $envName = "${{ github.event.inputs.environment }}"
           $appcmd = "C:\Windows\System32\inetsrv\appcmd.exe"
           $targetPath = "F:\Work\Personal\Deployment\ClaimServiceApi\$envName"
 
-          Write-Host "🔸 Cleaning target folder: $targetPath"
+          Write-Host "🔹 Cleaning deploy directory: $targetPath"
           if (Test-Path $targetPath) { Remove-Item "$targetPath\*" -Recurse -Force }
           else { New-Item -Path $targetPath -ItemType Directory }
 
-          Write-Host "🔸 Copying published files..."
+          Write-Host "🔹 Copying site files..."
           Copy-Item "deploy_target\*" $targetPath -Recurse -Force
 
-          Write-Host "🔸 Handling web.config replacement..."
-          if ($envName -eq "Development") { $envConfig = Join-Path $targetPath "web.config.Development" }
-          if ($envName -eq "Production")  { $envConfig = Join-Path $targetPath "web.config.Production" }
+          Write-Host "🔹 Replacing web.config based on environment..."
+          $configFile = if ($envName -eq "Development") { "web.config.Development" } else { "web.config.Production" }
+          $envConfig = Join-Path $targetPath $configFile
           $mainConfig = Join-Path $targetPath "web.config"
           if (Test-Path $mainConfig) { Remove-Item $mainConfig -Force }
           if (Test-Path $envConfig) { Copy-Item $envConfig $mainConfig -Force }
 
-          Write-Host "🔸 Restarting IIS AppPool..."
+          Write-Host "🔹 Restarting IIS AppPool..."
           & $appcmd stop apppool /apppool.name:"AspNetCore" 2>$null
           & $appcmd start apppool /apppool.name:"AspNetCore"
-          Write-Host "✅ Deployment to $envName completed successfully!"
+
+          Write-Host "✅ Deployment to $envName completed successfully."
