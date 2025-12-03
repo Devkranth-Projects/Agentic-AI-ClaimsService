@@ -204,13 +204,27 @@ jobs:
           Copy-Item "deploy_target\*" $targetPath -Recurse -Force
 
           # --- Environment-specific web.config replacement ---
-          if ($envName -eq "Development") { $envConfig = Join-Path $targetPath "web.config.Development" }
-          elseif ($envName -eq "Production") { $envConfig = Join-Path $targetPath "web.config.Production" }
+          # Determine environment-specific web.config
+            if ($envName -eq "Development") { $envConfig = Join-Path $targetPath "web.config.Development" }
+            elseif ($envName -eq "Production") { $envConfig = Join-Path $targetPath "web.config.Production" }
+            elseif ($envName -eq "Local") { $envConfig = Join-Path $targetPath "web.config.Local" }
 
-          $mainConfig = Join-Path $targetPath "web.config"
-          Write-Host "Replacing web.config for environment: $envName"
-          if (Test-Path $mainConfig) { Remove-Item $mainConfig -Force }
-          if (Test-Path $envConfig) { Copy-Item $envConfig $mainConfig -Force }
+            $mainConfig = Join-Path $targetPath "web.config"
+
+            Write-Host "🔹 Checking if main web.config exists in $targetPath..."
+
+            if (Test-Path $mainConfig) {
+                Write-Host "⚠️ web.config already exists. Deleting it..."
+                Remove-Item $mainConfig -Force
+            }
+
+            if (Test-Path $envConfig) {
+                Write-Host "➡️ Renaming $envConfig → web.config"
+                Rename-Item -Path $envConfig -NewName "web.config"
+                Write-Host "✅ Environment-specific config applied: web.config is now from $envConfig"
+            } else {
+                Write-Host "❌ Environment-specific config $envConfig not found! Deployment may be incomplete."
+            }
 
           Write-Host "Restarting AppPool 'AspNetCore'"
           & $appcmd stop apppool /apppool.name:"AspNetCore" 2>$null
