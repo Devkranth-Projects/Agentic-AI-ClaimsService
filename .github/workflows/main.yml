@@ -7,8 +7,7 @@ on:
 
   pull_request:
     branches:
-      - "Development"
-      - "Stage"
+      - "Development"      
       - "main"
 
   workflow_dispatch:
@@ -22,8 +21,7 @@ on:
         required: true
         type: choice
         options:
-          - Development
-          - Stage
+          - Development          
           - Production
 
 env:
