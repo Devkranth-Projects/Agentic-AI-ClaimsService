@@ -3,10 +3,25 @@ name: CI-CD-Pipeline-Local-IIS-Azure
 on:
   push:
     branches:
-      - 'Feature/**'
-      - 'Bug/**'
-      - 'Development'
-      - 'main'
+      - "Feature/**"
+      - "Bug/**"
+  pull_request:
+    branches:
+      - "Development"
+      - "main"
+  workflow_dispatch:
+    inputs:
+      sha_id:
+        description: "Commit SHA to deploy"
+        required: true
+        type: string
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - Development
+          - Production
 
 env:
   DOTNET_CORE_VERSION: 8.0.x
@@ -17,56 +32,51 @@ env:
 jobs:
 
   # ============================================================
-  # 1️⃣ BUILD STAGE
+  # 1️⃣ BUILD
   # ============================================================
   build:
-    name: 1️⃣ Build Project
+    name: 1️⃣ Build
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_CORE_VERSION }}
 
-      - name: Restore Dependencies
+      - name: Restore NuGet packages
         run: |
           echo "🔹 Restoring NuGet packages..."
           dotnet restore ${{ env.SOLUTION_PATH }}
 
-      - name: Build Project
+      - name: Build Solution
         run: |
-          echo "🔹 Building solution..."
+          echo "🔹 Building solution in Release configuration..."
           dotnet build ${{ env.SOLUTION_PATH }} -c Release --no-restore
 
       - name: Publish Project
         run: |
-          echo "🔹 Publishing project to temporary folder..."
-          echo "🔸 Project path: ${{ env.PROJECT_PATH }}"
-          echo "🔸 Output folder: ${{ runner.temp }}/publish_output"
+          echo "🔹 Publishing project..."
+          echo "🔹 Project path: ${{ env.PROJECT_PATH }}"
+          echo "🔹 Temporary output folder: ${{ runner.temp }}/publish_output"
           dotnet publish ${{ env.PROJECT_PATH }} -c Release -o ${{ runner.temp }}/publish_output
 
-      - name: Upload Build Artifacts
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}-${{ github.sha }}
           path: ${{ runner.temp }}/publish_output
 
   # ============================================================
-  # 2️⃣ TEST STAGE
+  # 2️⃣ TEST
   # ============================================================
   test:
     name: 2️⃣ Run Tests
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_CORE_VERSION }}
 
@@ -81,17 +91,16 @@ jobs:
           dotnet test "ClaimsServiceApi/Health.Claims.Service.Infrastructure.Tests/Health.Claims.Service.Infrastructure.Tests.csproj" -c Release
 
   # ============================================================
-  # 3️⃣ LOCAL IIS DEPLOYMENT (Feature/Bug branches)
+  # 3A 💾 Local IIS Deployment (Feature/Bug)
   # ============================================================
-  local-deploy:
-    name: 3️⃣ Local IIS Deployment (No Approval)
+  feature-deploy:
+    name: 3A 💾 Local IIS Deployment
     needs: test
     runs-on: self-hosted
-    if: startsWith(github.ref, 'refs/heads/Feature/') || startsWith(github.ref, 'refs/heads/Bug/')
+    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/heads/Feature/') || startsWith(github.ref, 'refs/heads/Bug/'))
     environment: Local
     steps:
-      - name: Download Build Artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}-${{ github.sha }}
           path: deploy_target
@@ -106,104 +115,95 @@ jobs:
           Write-Host "🔹 Starting Local IIS deployment for branch: $envName"
 
           if (Test-Path $targetPath) {
-              Write-Host "🔸 Cleaning existing folder..."
+              Write-Host "🔸 Cleaning existing folder at $targetPath..."
               Remove-Item "$targetPath\*" -Recurse -Force
           } else {
-              Write-Host "🔸 Creating target folder..."
-              New-Item -Path $targetPath -ItemType Directory
+              Write-Host "🔸 Target folder does not exist. Creating folder..."
+              New-Item -Path $targetPath -ItemType Directory | Out-Null
           }
 
-          Write-Host "🔹 Copying published files..."
+          Write-Host "🔹 Copying published files to $targetPath..."
           Copy-Item "deploy_target\*" $targetPath -Recurse -Force
 
-          # Handle web.config
           $mainConfig = Join-Path $targetPath "web.config"
-          $envConfigFile = "web.config.Development"  # Default for local
-          if (Test-Path (Join-Path $targetPath "web.config.Development")) {
-              $envConfigFile = "web.config.Development"
-          } elseif (Test-Path (Join-Path $targetPath "web.config.Production")) {
-              $envConfigFile = "web.config.Production"
-          }
-
-          $envConfig = Join-Path $targetPath $envConfigFile
+          $devConfig = Join-Path $targetPath "web.config.Development"
+          $prodConfig = Join-Path $targetPath "web.config.Production"
 
           if (Test-Path $mainConfig) {
               Write-Host "🔹 Removing existing web.config..."
               Remove-Item $mainConfig -Force
           }
 
-          if (Test-Path $envConfig) {
-              Write-Host "🔹 Renaming $envConfigFile to web.config..."
-              Rename-Item $envConfig $mainConfig
-          } else {
-              Write-Host "⚠️ No environment-specific web.config found."
+          if ($envName -eq "Local" -and (Test-Path $devConfig)) {
+              Write-Host "🔹 Renaming web.config.Development to web.config..."
+              Rename-Item $devConfig $mainConfig
+          } elseif ($envName -eq "Local" -and -not (Test-Path $devConfig)) {
+              Write-Host "⚠️ web.config.Development not found."
           }
 
-          Write-Host "🔹 Restarting AppPool..."
+          Write-Host "🔹 Restarting IIS AppPool..."
           & $appcmd stop apppool /apppool.name:"AspNetCore" 2>$null
           & $appcmd start apppool /apppool.name:"AspNetCore"
 
-          Write-Host "✅ Local IIS deployment completed."
+          Write-Host "✅ Local IIS deployment completed successfully."
 
   # ============================================================
-  # 4️⃣ APPROVED ENVIRONMENT DEPLOYMENT (Development/Main)
+  # 4️⃣ Approved Environment Deployment (Development/Main)
   # ============================================================
-  approved-deploy:
-    name: 4️⃣ Deploy to Approved Environment
+  deploy-approve:
+    name: 4️⃣ 🔒 Deploy with Approval
     needs: test
     runs-on: self-hosted
-    if: github.ref == 'refs/heads/Development' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/Development' || github.ref == 'refs/heads/main')
     environment:
-      name: ${{ github.ref_name }}
+      name: ${{ github.ref == 'refs/heads/Development' && 'Development' || 'Production' }}
     steps:
-      - name: Require Approval
-        run: echo "🔒 Waiting for manual approval in GitHub UI..."
-
-      - name: Download Build Artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}-${{ github.sha }}
           path: deploy_target
 
-      - name: Deploy to IIS
+      - name: Deploy to IIS (Approved Environment)
         shell: powershell
         run: |
-          $envName = "${{ github.ref_name }}"
+          $envName = "${{ github.ref == 'refs/heads/Development' && 'Development' || 'Production' }}"
           $appcmd = "C:\Windows\System32\inetsrv\appcmd.exe"
           $targetPath = "F:\Work\Personal\Deployment\ClaimServiceApi\$envName"
 
-          Write-Host "🔹 Starting IIS deployment for branch: $envName"
+          Write-Host "🔹 Starting IIS deployment for $envName (requires approval)"
 
           if (Test-Path $targetPath) {
-              Write-Host "🔸 Cleaning existing folder..."
+              Write-Host "🔸 Cleaning existing folder at $targetPath..."
               Remove-Item "$targetPath\*" -Recurse -Force
           } else {
-              Write-Host "🔸 Creating target folder..."
-              New-Item -Path $targetPath -ItemType Directory
+              Write-Host "🔸 Target folder does not exist. Creating folder..."
+              New-Item -Path $targetPath -ItemType Directory | Out-Null
           }
 
-          Write-Host "🔹 Copying published files..."
+          Write-Host "🔹 Copying published files to $targetPath..."
           Copy-Item "deploy_target\*" $targetPath -Recurse -Force
 
-          # Handle web.config
           $mainConfig = Join-Path $targetPath "web.config"
-          $envConfigFile = if ($envName -eq "Development") { "web.config.Development" } else { "web.config.Production" }
-          $envConfig = Join-Path $targetPath $envConfigFile
+          $devConfig = Join-Path $targetPath "web.config.Development"
+          $prodConfig = Join-Path $targetPath "web.config.Production"
 
           if (Test-Path $mainConfig) {
               Write-Host "🔹 Removing existing web.config..."
               Remove-Item $mainConfig -Force
           }
 
-          if (Test-Path $envConfig) {
-              Write-Host "🔹 Renaming $envConfigFile to web.config..."
-              Rename-Item $envConfig $mainConfig
+          if ($envName -eq "Development" -and (Test-Path $devConfig)) {
+              Write-Host "🔹 Renaming web.config.Development to web.config..."
+              Rename-Item $devConfig $mainConfig
+          } elseif ($envName -eq "Production" -and (Test-Path $prodConfig)) {
+              Write-Host "🔹 Renaming web.config.Production to web.config..."
+              Rename-Item $prodConfig $mainConfig
           } else {
               Write-Host "⚠️ No environment-specific web.config found."
           }
 
-          Write-Host "🔹 Restarting AppPool..."
+          Write-Host "🔹 Restarting IIS AppPool..."
           & $appcmd stop apppool /apppool.name:"AspNetCore" 2>$null
           & $appcmd start apppool /apppool.name:"AspNetCore"
 
-          Write-Host "✅ Deployment to $envName completed."
+          Write-Host "✅ IIS deployment for $envName completed successfully."
