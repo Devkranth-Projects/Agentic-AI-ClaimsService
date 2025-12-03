@@ -7,9 +7,8 @@ on:
 
   pull_request:
     branches:
-      - "Development"      
-      - "main"
-
+      - 'Development'
+      - 'main'
   workflow_dispatch:
     inputs:
       sha_id:
@@ -40,8 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/Feature/')) ||
-      (github.event_name == 'pull_request')
-
+      (github.event_name == 'pull_request' && (github.base_ref == 'Development' || github.base_ref == 'main'))
     steps:
       - uses: actions/checkout@v4
 
@@ -132,9 +130,7 @@ jobs:
     name: 3B 🔔 Trigger Development Deployment
     needs: test
     runs-on: ubuntu-latest
-
-    if: github.event_name == 'pull_request' && github.base_ref == 'Development'
-
+    if: success() && github.event_name == 'pull_request' && github.base_ref == 'Development'
     steps:
       - name: Trigger deploy with approval
         uses: benc-uk/workflow-dispatch@v1
